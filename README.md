@@ -174,7 +174,7 @@ mssql_query source: "prod_WMS" sql: "SELECT TOP 10 Url, CreateTime FROM Sys_Log 
 
 | 项 | 实测值 |
 | --- | --- |
-| DSH 桌面端 | 0.2.0-rc.1（Electron，profile: desktop） |
+| DSH 桌面端 | 应用 0.2.0-rc.1（Electron，profile: desktop），内含 @deepseek-ai/dsh / dsh-tools 0.2.0-rc.2、cordis 4.0.4 |
 | Web profile / dsh CLI | @deepseek-ai/dsh 0.1.7-rc.2、@deepseek-ai/cordis 4.0.4 |
 | 插件驱动 | mssql 12.7.4（@types/mssql 12.3.0） |
 | 生产库 172.16.10.99 | Microsoft SQL Server 2012 (SP1) 11.0.3128.0 |
@@ -182,7 +182,7 @@ mssql_query source: "prod_WMS" sql: "SELECT TOP 10 Url, CreateTime FROM Sys_Log 
 | 测试库 172.16.10.57 | Microsoft SQL Server 2019 (RTM) 15.0.2000.5 |
 
 peerDependencies 按上表对齐：`@deepseek-ai/dsh-tools: ^0.1.0-rc.7 || ^0.1.7-alpha.1 || ^0.2.0-rc.1`
-（三条预发布线各自显式列出——semver 规定预发布版本只有在同 tuple 的比较符也带预发布时才满足，所以 Web CLI 的 0.1.7-rc.2 必须靠 `^0.1.7-alpha.1` 覆盖，桌面端的 0.2.0-rc.1 靠 `^0.2.0-rc.1`）；`@deepseek-ai/cordis: ^4.0.1` 覆盖 4.0.4。
+（三条预发布线各自显式列出——semver 规定预发布版本只有在同 tuple 的比较符也带预发布时才满足，所以 Web CLI 的 0.1.7-rc.2 必须靠 `^0.1.7-alpha.1` 覆盖，桌面端的 0.2.0-rc.2 靠 `^0.2.0-rc.1`）；`@deepseek-ai/cordis: ^4.0.1` 覆盖 4.0.4。实测 0.1.0-rc.7 / 0.1.7-rc.2 / 0.2.0-rc.2 三者都满足。
 
 只读验证（在生产库 `prod_WMS` / `DAYA_WMS` 上完成，期间**没有任何写操作**）：
 
