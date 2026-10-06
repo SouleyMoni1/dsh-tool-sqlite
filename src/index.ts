@@ -1,203 +1,349 @@
 /**
- * dsh-tool-sqlite 插件入口。
+ * dsh-tool-mssql 插件入口。
  *
- * 注册 `sqlite` 工具：列出工作区内的数据库、列库表结构、执行只读查询。
- * 接入方式：在 cordis.yml 追加：
- *   - id: tool-sqlite
- *     name: 'dsh-tool-sqlite'
+ * 注册 6 个 mssql_* 工具，让模型直接读（可选写）SQL Server：
+ *   mssql_sources / mssql_databases / mssql_tables / mssql_schema / mssql_query / mssql_execute
  *
- * 安全边界：只读打开（readOnly: true）；单语句 prepare；SELECT/WITH/PRAGMA/
- * EXPLAIN/VALUES 白名单；路径限制在工作区内；结果行数上限 500。
+ * 数据源配置（config.sources 优先，否则读文件——改文件即时生效，按 mtime 热加载）：
+ *   1. 插件 config.sources：cordis.patch.yml 里的数组；
+ *   2. $DSH_HOME/mssql-tool/sources.json。
+ *
+ * 凭据边界：密码只经 passwordEnv（推荐）或宿主侧文件进入进程，任何工具返回值都不含密码。
  */
 
+import { readFileSync, statSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
+  assertReadonlySql,
+  assertWriteSql,
+  clampLimit,
+  defaultSourcesPath,
+  describeSource,
+  formatColumnType,
+  parseSources,
+  resolvePassword,
+  type SourceConfig,
+} from './mssql-core.js'
+import {
+  closeAllPools,
   listDatabases,
   listTables,
-  queryRows,
-  resolveDbPath,
-  tableSchema,
-  tableSummary,
-  type ColumnInfo,
-} from './sqlite-core.js'
+  probe,
+  runExecute,
+  runQuery,
+  tableColumns,
+} from './pool.js'
 
-export const name = 'dsh-tool-sqlite'
+export const name = 'dsh-tool-mssql'
 export const inject = ['tools']
 
-function workspaceOf(exec: { agent?: { session?: { header?: { cwd?: string } } } }): string {
-  return exec.agent?.session?.header?.cwd || process.cwd()
+export interface Config {
+  /** 直接在该字段写源数组；非空时忽略配置文件。 */
+  sources?: SourceConfig[]
+  /** 源清单配置文件路径，默认 $DSH_HOME/mssql-tool/sources.json。 */
+  configFile?: string
+  /** 工具未显式传 source 时使用的默认源 id；缺省取清单第一条。 */
+  defaultSource?: string
 }
 
-export function apply(ctx: Context): void {
+const TOOL_TIMEOUT_MS = 30_000
+
+export function apply(ctx: Context, config: Config = {}): void {
+  const filePath = config.configFile ?? defaultSourcesPath()
+  let fromFile: { mtimeMs: number; sources: SourceConfig[] } | null = null
+  let fromConfig: SourceConfig[] | null = null
+
+  const listSources = (): SourceConfig[] => {
+    const inline = config.sources
+    if (Array.isArray(inline) && inline.length > 0) {
+      fromConfig ??= parseSources(inline)
+      return fromConfig
+    }
+    let mtimeMs = 0
+    try {
+      mtimeMs = statSync(filePath).mtimeMs
+    } catch {
+      return []
+    }
+    if (fromFile && fromFile.mtimeMs === mtimeMs) return fromFile.sources
+    const parsed = parseSources(JSON.parse(readFileSync(filePath, 'utf8')))
+    fromFile = { mtimeMs, sources: parsed }
+    return parsed
+  }
+
+  const pick = (id?: string): SourceConfig => {
+    const all = listSources()
+    if (all.length === 0) {
+      throw new Error(
+        `未配置任何数据源：请在 ${filePath} 写 JSON 数组，或配置插件 config.sources`,
+      )
+    }
+    const wanted = id ?? config.defaultSource ?? (all[0] as SourceConfig).id
+    const found = all.find((s) => s.id === wanted)
+    if (!found) {
+      throw new Error(`未知数据源 ${wanted}；可用: ${all.map((s) => s.id).join(', ')}`)
+    }
+    return found
+  }
+
+  const fail = (error: unknown): string =>
+    `mssql 错误: ${error instanceof Error ? error.message : String(error)}`
+
   ctx.tools.register(
     defineTool({
-      name: 'sqlite_list',
+      name: 'mssql_sources',
       description:
-        'List SQLite database files (.db/.sqlite/.sqlite3/.db3) inside the workspace ' +
-        '(up to 2 levels deep, skipping node_modules and dot dirs). ' +
-        'Use before sqlite_tables / sqlite_query to discover available databases.',
+        'List configured SQL Server data sources (id / host / port / database / user / readonly). ' +
+        'Never returns passwords. Call this first to learn the "source" id used by other mssql_* tools. ' +
+        'Pass probe: true to also test connectivity and print the server version.',
       parameters: {
-        dir: {
-          type: 'string',
-          description: 'Optional subdirectory to scan; defaults to the workspace root.',
+        probe: {
+          type: 'boolean',
+          description: 'Test each source with a real connection (SELECT @@VERSION). Default false.',
         },
       },
       output: {
         schema: { type: 'string' },
         render: (_args, value) => [{ type: 'text', text: value }],
       },
-      execute: async (args, exec) => {
-        const ws = workspaceOf(exec)
-        const dbs = listDatabases(ws, args.dir)
-        if (dbs.length === 0) return 'sqlite: 工作区内未发现数据库文件'
-        return dbs.join('\n')
+      execute: async (args) => {
+        try {
+          const all = listSources()
+          if (all.length === 0) {
+            return `mssql: 未配置数据源。请在 ${filePath} 写 JSON 数组，或配置插件 config.sources`
+          }
+          if (args.probe !== true) return JSON.stringify(all.map(describeSource), null, 2)
+          const probed = []
+          for (const source of all) {
+            const view = describeSource(source)
+            try {
+              const info = await probe(source, resolvePassword(source))
+              probed.push({
+                ...view,
+                reachable: true,
+                version: info.version,
+                currentDatabase: info.database,
+              })
+            } catch (error) {
+              probed.push({
+                ...view,
+                reachable: false,
+                error: error instanceof Error ? error.message : String(error),
+              })
+            }
+          }
+          return JSON.stringify(probed, null, 2)
+        } catch (error) {
+          return fail(error)
+        }
       },
-      timeoutMs: 3000,
+      timeoutMs: 60_000,
     }),
   )
 
   ctx.tools.register(
     defineTool({
-      name: 'sqlite_tables',
+      name: 'mssql_databases',
       description:
-        'List all tables and views in a SQLite database file (read-only). ' +
-        'db must be a path inside the workspace.',
+        'List databases on one SQL Server source (read-only, uses sys.databases). ' +
+        'Omit source to use the default one.',
       parameters: {
-        db: {
-          type: 'string',
-          required: true,
-          description: 'Path to the .db/.sqlite file, relative to the workspace.',
-        },
+        source: { type: 'string', description: 'Source id from mssql_sources; optional.' },
       },
       output: {
         schema: { type: 'string' },
         render: (_args, value) => [{ type: 'text', text: value }],
       },
-      execute: async (args, exec) => {
-        const ws = workspaceOf(exec)
-        const abs = resolveDbPath(ws, args.db)
-        const tables = listTables(abs)
-        return tables.length ? tables.join('\n') : 'sqlite: 库中没有表或视图'
+      execute: async (args) => {
+        try {
+          const source = pick(args.source)
+          const names = await listDatabases(source, resolvePassword(source))
+          return JSON.stringify({ source: source.id, databases: names })
+        } catch (error) {
+          return fail(error)
+        }
       },
-      timeoutMs: 3000,
+      timeoutMs: TOOL_TIMEOUT_MS,
     }),
   )
 
   ctx.tools.register(
     defineTool({
-      name: 'sqlite_schema',
+      name: 'mssql_tables',
       description:
-        'Show the column schema of one table in a SQLite database (read-only). ' +
-        'Returns columns with type / notnull / default / primary-key flags.',
+        'List tables and views of one source with schema, object kind and row count estimate ' +
+        '(read-only). Filter by schema or name substring before writing SQL — much cheaper than SELECT *.',
       parameters: {
-        db: {
-          type: 'string',
-          required: true,
-          description: 'Path to the .db/.sqlite file, relative to the workspace.',
-        },
-        table: {
-          type: 'string',
-          required: true,
-          description: 'Table name.',
-        },
+        source: { type: 'string', description: 'Source id from mssql_sources; optional.' },
+        schema: { type: 'string', description: 'Restrict to one schema, e.g. dbo.' },
+        filter: { type: 'string', description: 'Case-insensitive substring match on the table name.' },
+        limit: { type: 'integer', description: 'Max rows to return (default 100, hard cap 500).' },
       },
       output: {
         schema: { type: 'string' },
         render: (_args, value) => [{ type: 'text', text: value }],
       },
-      execute: async (args, exec) => {
-        const ws = workspaceOf(exec)
-        const abs = resolveDbPath(ws, args.db)
-        const cols = tableSchema(abs, args.table)
-        const lines = cols.map((c: ColumnInfo) =>
-          [c.name, c.type, c.notnull ? 'NOT NULL' : '', c.pk ? `PK(${c.pk})` : '']
-            .filter(Boolean)
-            .join(' '),
-        )
-        return lines.join('\n')
+      execute: async (args) => {
+        try {
+          const source = pick(args.source)
+          const rows = await listTables(source, resolvePassword(source), {
+            schema: args.schema,
+            filter: args.filter,
+            limit: clampLimit(args.limit),
+          })
+          return JSON.stringify({ source: source.id, count: rows.length, tables: rows }, null, 2)
+        } catch (error) {
+          return fail(error)
+        }
       },
-      timeoutMs: 3000,
+      timeoutMs: TOOL_TIMEOUT_MS,
     }),
   )
 
   ctx.tools.register(
     defineTool({
-      name: 'sqlite_query',
+      name: 'mssql_schema',
       description:
-        'Run a read-only SQL query against a SQLite database inside the workspace. ' +
-        'Only SELECT / WITH / PRAGMA / EXPLAIN / VALUES are allowed; writes are rejected. ' +
-        'Use ? placeholders with params for values. Results are JSON with columns + rows.',
+        'Show column definitions of one table (read-only): name, type with length/precision, ' +
+        'nullable, identity, primary key and default expression. ' +
+        'Accepts "table" or "schema.table".',
       parameters: {
-        db: {
-          type: 'string',
-          required: true,
-          description: 'Path to the .db/.sqlite file, relative to the workspace.',
-        },
+        source: { type: 'string', description: 'Source id from mssql_sources; optional.' },
+        table: { type: 'string', required: true, description: 'Table name, e.g. users or dbo.users.' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      execute: async (args) => {
+        try {
+          const source = pick(args.source)
+          const columns = await tableColumns(source, resolvePassword(source), args.table)
+          if (columns.length === 0) {
+            return `mssql: 表 ${args.table} 不存在或当前账号无元数据权限`
+          }
+          const lines = columns.map((c) =>
+            [
+              c.column,
+              formatColumnType(c),
+              c.nullable ? 'NULL' : 'NOT NULL',
+              c.identity ? 'IDENTITY' : '',
+              c.primaryKey ? 'PK' : '',
+              c.default ? `DEFAULT ${c.default}` : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          )
+          return JSON.stringify({ source: source.id, table: args.table, columns: lines }, null, 2)
+        } catch (error) {
+          return fail(error)
+        }
+      },
+      timeoutMs: TOOL_TIMEOUT_MS,
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'mssql_query',
+      description:
+        'Run ONE read-only statement against a source (SELECT / WITH / VALUES). Writes are rejected. ' +
+        'Use @p0, @p1 placeholders and pass params: [v0, v1] — never interpolate values into SQL. ' +
+        'Results come back as { columns, rows, truncated, rowCount }.',
+      parameters: {
+        source: { type: 'string', description: 'Source id from mssql_sources; optional.' },
         sql: {
           type: 'string',
           required: true,
-          description: 'Single read-only SQL statement (SELECT / WITH / PRAGMA / EXPLAIN / VALUES).',
+          description: 'Single read-only T-SQL statement with @p0-style placeholders.',
         },
         params: {
           type: 'array',
           items: { type: 'json' },
-          description: 'Optional bound parameters for ? placeholders.',
+          description: 'Bound values for @p0, @p1 … in order.',
         },
-        limit: {
-          type: 'integer',
-          description: 'Max rows to return (default 100, hard cap 500).',
-        },
+        limit: { type: 'integer', description: 'Max rows to return (default 100, hard cap 500).' },
       },
       output: {
         schema: { type: 'string' },
         render: (_args, value) => [{ type: 'text', text: value }],
       },
-      execute: async (args, exec) => {
-        const ws = workspaceOf(exec)
-        const abs = resolveDbPath(ws, args.db)
-        const { columns, rows, truncated } = queryRows(
-          abs,
-          args.sql,
-          Array.isArray(args.params) ? (args.params as unknown[]) : [],
-          typeof args.limit === 'number' ? args.limit : undefined,
-        )
-        const head = JSON.stringify({ columns, rows })
-        return truncated ? head + `\n(结果超过上限，已截断为 ${rows.length} 行)` : head
+      execute: async (args) => {
+        try {
+          const source = pick(args.source)
+          assertReadonlySql(args.sql)
+          const result = await runQuery(
+            source,
+            resolvePassword(source),
+            args.sql,
+            Array.isArray(args.params) ? args.params : undefined,
+            clampLimit(args.limit),
+          )
+          return JSON.stringify({ source: source.id, ...result }, null, 2)
+        } catch (error) {
+          return fail(error)
+        }
       },
-      timeoutMs: 5000,
+      timeoutMs: TOOL_TIMEOUT_MS,
     }),
   )
 
   ctx.tools.register(
     defineTool({
-      name: 'sqlite_summary',
+      name: 'mssql_execute',
       description:
-        'Column-wise statistics summary of one table (read-only): total rows + per-column type, ' +
-        'non-null count, distinct count, and min/max/avg for numeric columns. ' +
-        'Use instead of SELECT * to understand a table before querying — saves tokens.',
+        'Run ONE write statement (INSERT / UPDATE / DELETE / MERGE) against a writable source. ' +
+        'Requires the source to be configured writable AND an explicit allowWrite: true. ' +
+        'DDL needs allowDdl on the source. Read data with mssql_query instead.',
       parameters: {
-        db: {
-          type: 'string',
+        source: { type: 'string', description: 'Source id from mssql_sources; optional.' },
+        sql: { type: 'string', required: true, description: 'Single write statement.' },
+        allowWrite: {
+          type: 'boolean',
           required: true,
-          description: 'Path to the .db/.sqlite file, relative to the workspace.',
+          description: 'Must be true — the explicit confirmation gate for any write.',
         },
-        table: {
-          type: 'string',
-          required: true,
-          description: 'Table name.',
+        params: {
+          type: 'array',
+          items: { type: 'json' },
+          description: 'Bound values for @p0, @p1 … in order.',
         },
       },
       output: {
         schema: { type: 'string' },
         render: (_args, value) => [{ type: 'text', text: value }],
       },
-      execute: async (args, exec) => {
-        const ws = workspaceOf(exec)
-        const abs = resolveDbPath(ws, args.db)
-        return JSON.stringify(tableSummary(abs, args.table))
+      execute: async (args) => {
+        try {
+          const source = pick(args.source)
+          if (source.writable !== true) {
+            return `mssql: 源 ${source.id} 是只读的（writable 未开启），拒绝写操作`
+          }
+          if (args.allowWrite !== true) {
+            return `mssql: 写操作需要显式 allowWrite: true（源 ${source.id}）`
+          }
+          assertWriteSql(args.sql, {
+            allowDdl: source.allowDdl === true,
+            allowBatch: source.allowBatch === true,
+          })
+          const result = await runExecute(
+            source,
+            resolvePassword(source),
+            args.sql,
+            Array.isArray(args.params) ? args.params : undefined,
+          )
+          return JSON.stringify({ source: source.id, ...result }, null, 2)
+        } catch (error) {
+          return fail(error)
+        }
       },
-      timeoutMs: 5000,
+      timeoutMs: TOOL_TIMEOUT_MS,
     }),
   )
+
+  // 插件卸载/重载时关闭连接池；disposer 由 cordis 在 fiber 卸载时调用。
+  ctx.effect(() => () => {
+    void closeAllPools()
+  })
 }

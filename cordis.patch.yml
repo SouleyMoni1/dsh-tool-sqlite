@@ -1,4 +1,11 @@
-# dsh bundle patch: inserts this plugin into a profile's layer stack (0806+).
+# dsh bundle patch: 把本插件插进 profile 的层栈（0806+）。
+#
+# 源清单两种配法，二选一：
+#   1. 这里直接写 config.sources（非空即生效）；
+#   2. 留空 sources，改用 $DSH_HOME/mssql-tool/sources.json —— 改文件即时生效，无需重启。
 - insert:
-    - id: tool-sqlite
-      name: 'dsh-tool-sqlite'
+    - id: tool-mssql
+      name: 'dsh-tool-mssql'
+      config:
+        sources: []
+        # defaultSource: prod_WMS
