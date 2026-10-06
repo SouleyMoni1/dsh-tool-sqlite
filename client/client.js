@@ -305,7 +305,7 @@ window.__ModuleLoader__.load({
                   value: draft.id,
                   disabled: busy !== '',
                   placeholder: 'prod_WMS',
-                  onChange: (event) => setDraft({ ...draft, id: event.target.value }),
+                  onChange: (event) => setDraft((prev) => ({ ...prev, id: event.target.value })),
                 }),
               ),
               field(
@@ -314,7 +314,7 @@ window.__ModuleLoader__.load({
                 h(Input, {
                   value: draft.description,
                   disabled: busy !== '',
-                  onChange: (event) => setDraft({ ...draft, description: event.target.value }),
+                  onChange: (event) => setDraft((prev) => ({ ...prev, description: event.target.value })),
                 }),
               ),
               field(
@@ -324,7 +324,7 @@ window.__ModuleLoader__.load({
                   value: draft.dsn,
                   disabled: busy !== '',
                   placeholder: 'sqlserver://user:password@host:1433/database',
-                  onChange: (event) => setDraft({ ...draft, dsn: event.target.value }),
+                  onChange: (event) => setDraft((prev) => ({ ...prev, dsn: event.target.value })),
                 }),
                 true,
               ),
@@ -335,7 +335,7 @@ window.__ModuleLoader__.load({
                   checked: draft.writable,
                   disabled: busy !== '',
                   label: t('writableLabel'),
-                  onChange: (next) => setDraft({ ...draft, writable: next }),
+                  onChange: (next) => setDraft((prev) => ({ ...prev, writable: next })),
                 }),
               ),
               field(
@@ -345,7 +345,7 @@ window.__ModuleLoader__.load({
                   checked: draft.allowDdl,
                   disabled: busy !== '',
                   label: t('ddlLabel'),
-                  onChange: (next) => setDraft({ ...draft, allowDdl: next }),
+                  onChange: (next) => setDraft((prev) => ({ ...prev, allowDdl: next })),
                 }),
               ),
             ),
@@ -469,7 +469,12 @@ window.__ModuleLoader__.load({
           h('h2', { className: 'msx-title' }, t('title')),
           h('p', { className: 'msx-hint' }, t('intro')),
           data.file
-            ? h('p', { className: 'msx-hint' }, t('file') + '：' + h('span', { className: 'msx-path' }, data.file))
+            ? h(
+                'p',
+                { className: 'msx-hint' },
+                t('file') + '：',
+                h('span', { className: 'msx-path' }, data.file),
+              )
             : null,
         ),
         body(),
