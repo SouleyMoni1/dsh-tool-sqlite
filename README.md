@@ -41,11 +41,22 @@ DeepSeek Harness 的 **SQL Server 原生工具插件**：模型直接读（可�
 
 装完**重启 DSH** 生效（`sources.json` 的改动不用重启）。
 
-### Web profile（CLI 可直接管理）
+### 本地目录安装（开发调试）
+
+`link:` 的目标是**相对 profile 目录**解析的：跨盘符直接写 `link:F:\...` 会生成坏联接
+（pnpm 把它当相对路径，落到 `profiles\<profile>\F:\...`）。所以先在 `~/.dsh/profiles`
+下建一个指向仓库的目录联接，各 profile 都用相对路径引用它：
+
+```bat
+mkdir "%USERPROFILE%\.dsh\profiles\.local-links"
+mklink /J "%USERPROFILE%\.dsh\profiles\.local-links\dsh-tool-mssql" "F:\EdenOS\AI\dsh-tool-mssql"
+```
+
+`link:` 不跑 `prepack`，装之前先 `npm run build` 出 `lib/`。
 
 ```bash
-# 本地目录（开发调试；link: 不跑 prepack，先 npm run build 出 lib/）
-dsh plugin --profile web add "link:F:\\EdenOS\\AI\\dsh-tool-mssql"
+# Web profile（CLI 可直接管理）
+dsh plugin --profile web add "link:../.local-links/dsh-tool-mssql"
 
 # npm（发布后）
 dsh plugin --profile web add dsh-tool-mssql
@@ -61,9 +72,11 @@ dsh plugin --profile web add "github:SouleyMoni1/dsh-tool-sqlite"
 桌面端要么走市场面板装 npm 上的包，要么手工做一遍 CLI 的等价操作：
 
 1. `~/.dsh/profiles/desktop/package.json` 的 `dependencies` 加
-   `"dsh-tool-mssql": "link:F:\\EdenOS\\AI\\dsh-tool-mssql"`；
+   `"dsh-tool-mssql": "link:../.local-links/dsh-tool-mssql"`；
 2. 同一文件的 `dsh.profile.bundles` 数组加 `"dsh-tool-mssql"`；
-3. 在 profile 目录里用应用自带的 pnpm（`nodeLinker: hoisted`）安装，然后重启 DSH。
+3. 在 profile 目录里用应用自带的那份 pnpm 执行 `pnpm install`
+   （`~/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/{node,pnpm}`，
+   profile 的 `.modules.yaml` 记的是 `pnpm@11.7.0`），然后重启 DSH。
 
 - 两种 profile 插件不互通，各自装各自的。
 - 安装前把 `@deepseek-ai/dsh-tools` 的 peer 范围与你的 DSH 版本对一下（见 `package.json`）。
@@ -168,8 +181,8 @@ mssql_query source: "prod_WMS" sql: "SELECT TOP 10 Url, CreateTime FROM Sys_Log 
 | 开发库 192.168.1.98 | Microsoft SQL Server 2012 11.0.2100.60 |
 | 测试库 172.16.10.57 | Microsoft SQL Server 2019 (RTM) 15.0.2000.5 |
 
-peerDependencies 按上表对齐：`@deepseek-ai/dsh-tools: ^0.1.0-rc.7 || ^0.2.0-rc.1`
-（覆盖 0.1.7-rc.2 的 Web CLI 与 0.2.0-rc.1 的桌面端）；`@deepseek-ai/cordis: ^4.0.1` 覆盖 4.0.4。
+peerDependencies 按上表对齐：`@deepseek-ai/dsh-tools: ^0.1.0-rc.7 || ^0.1.7-alpha.1 || ^0.2.0-rc.1`
+（三条预发布线各自显式列出——semver 规定预发布版本只有在同 tuple 的比较符也带预发布时才满足，所以 Web CLI 的 0.1.7-rc.2 必须靠 `^0.1.7-alpha.1` 覆盖，桌面端的 0.2.0-rc.1 靠 `^0.2.0-rc.1`）；`@deepseek-ai/cordis: ^4.0.1` 覆盖 4.0.4。
 
 只读验证（在生产库 `prod_WMS` / `DAYA_WMS` 上完成，期间**没有任何写操作**）：
 
@@ -179,6 +192,10 @@ peerDependencies 按上表对齐：`@deepseek-ai/dsh-tools: ^0.1.0-rc.7 || ^0.2.
 - `mssql_tables filter: "Log"`：14 张表/视图（含 `Sys_Interface_log_2026W38`～`W41` 及行数估算）；
 - `mssql_schema dbo.Sys_Log`：16 列完整结构（类型/长度/可空/IDENTITY/默认值）；
 - `mssql_query`：`@p0` 绑定参数正确回传；单条 SELECT 返回 `{ columns, rows, truncated, rowCount }`。
+
+DSH 会话内验证：另建一个 headless profile（bundles: `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-headless`），
+用上面的 `link:` recipe 装上本插件后跑 `dsh --profile <p> --json "<任务>"`，
+会话事件里 `mssql_sources` / `mssql_tables` 两个工具被正常调用并返回生产数据——即插件确实被 DSH 加载、6 个工具已注册。
 
 守卫链验证（写通道只用「被拒绝」验证，未对任何库执行写）：
 
