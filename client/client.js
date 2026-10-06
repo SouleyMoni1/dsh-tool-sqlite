@@ -36,6 +36,11 @@ window.__ModuleLoader__.load({
       file: '清单文件',
       add: '新增数据源',
       reload: '重新加载',
+      sortLabel: '排序',
+      sortId: '按别名',
+      sortDescription: '按描述',
+      sortDefault: '文件顺序',
+      sortHint: '再点一次切换升序 / 降序',
       loading: '加载中…',
       retry: '重试',
       empty: '还没有数据源，点「新增数据源」开始。',
@@ -77,6 +82,11 @@ window.__ModuleLoader__.load({
       file: 'List file',
       add: 'Add source',
       reload: 'Reload',
+      sortLabel: 'Sort',
+      sortId: 'Alias',
+      sortDescription: 'Description',
+      sortDefault: 'File order',
+      sortHint: 'Click again to toggle ascending / descending',
       loading: 'Loading…',
       retry: 'Retry',
       empty: 'No data source yet — start with “Add source”.',
@@ -139,6 +149,7 @@ window.__ModuleLoader__.load({
         '.msx-hint{color:var(--dsw-alias-label-tertiary,color-mix(in srgb,currentColor 55%,transparent));font-size:12px;line-height:1.5;margin:4px 0 0}',
         '.msx-path{font-family:var(--dsw-font-markdown-code-block,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;color:var(--dsw-alias-label-secondary,color-mix(in srgb,currentColor 75%,transparent))}',
         '.msx-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+        '.msx-sort{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:4px}',
         '.msx-list{display:flex;flex-direction:column;gap:8px}',
         '.msx-row{border:1px solid var(--dsw-alias-border-l2,color-mix(in srgb,currentColor 14%,transparent));border-radius:var(--dsw-radius-md,10px);padding:10px 12px;display:flex;flex-direction:column;gap:8px}',
         '.msx-rowhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
@@ -176,6 +187,111 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 排序：by 为空表示保持清单文件顺序，其余按 id / 描述。 */
+    function sortSources(list, by, dir) {
+      if (!by) return list
+      const factor = dir === 'desc' ? -1 : 1
+      return [...list].sort((a, b) => {
+        const left = by === 'id' ? a.id : a.description || ''
+        const right = by === 'id' ? b.id : b.description || ''
+        return left.localeCompare(right, 'zh', { numeric: true, sensitivity: 'base' }) * factor
+      })
+    }
+
+    /** 编辑器：新增时挂在工具条下方，编辑时顶替被点的那一行——位置跟着点击走。 */
+    function Editor(props) {
+      const t = props.t
+      const draft = props.draft
+      const busy = props.busy
+      const setDraft = props.setDraft
+      const field = (label, hint, control, wide) =>
+        h(
+          'label',
+          { className: wide ? 'msx-field msx-wide' : 'msx-field' },
+          h('span', { className: 'msx-label' }, label),
+          control,
+          hint ? h('span', { className: 'msx-hint' }, hint) : null,
+        )
+      return h(
+        'div',
+        { className: 'msx-card' },
+        h('div', { className: 'msx-card-title' }, draft.originalId ? t('editTitle') : t('newTitle')),
+        h(
+          'div',
+          { className: 'msx-grid' },
+          field(
+            t('idLabel'),
+            t('idHint'),
+            h(Input, {
+              value: draft.id,
+              disabled: busy !== '',
+              placeholder: 'prod_WMS',
+              onChange: (event) => setDraft((prev) => ({ ...prev, id: event.target.value })),
+            }),
+          ),
+          field(
+            t('descLabel'),
+            t('descHint'),
+            h(Input, {
+              value: draft.description,
+              disabled: busy !== '',
+              onChange: (event) => setDraft((prev) => ({ ...prev, description: event.target.value })),
+            }),
+          ),
+          field(
+            t('dsnLabel'),
+            t('dsnHint'),
+            h(Input, {
+              value: draft.dsn,
+              disabled: busy !== '',
+              placeholder: 'sqlserver://user:password@host:1433/database',
+              onChange: (event) => setDraft((prev) => ({ ...prev, dsn: event.target.value })),
+            }),
+            true,
+          ),
+          field(
+            t('writableLabel'),
+            t('writableHint'),
+            h(Switch, {
+              checked: draft.writable,
+              disabled: busy !== '',
+              label: t('writableLabel'),
+              onChange: (next) => setDraft((prev) => ({ ...prev, writable: next })),
+            }),
+          ),
+          field(
+            t('ddlLabel'),
+            t('ddlHint'),
+            h(Switch, {
+              checked: draft.allowDdl,
+              disabled: busy !== '',
+              label: t('ddlLabel'),
+              onChange: (next) => setDraft((prev) => ({ ...prev, allowDdl: next })),
+            }),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'msx-actions' },
+          h(
+            Button,
+            { size: 'sm', variant: 'primary', disabled: busy !== '', onClick: () => void props.onSave() },
+            busy === 'save' ? t('saving') : t('save'),
+          ),
+          h(
+            Button,
+            { size: 'sm', variant: 'outline', disabled: busy !== '', onClick: () => void props.onTest() },
+            busy === 'test' ? t('testing') : t('test'),
+          ),
+          h(
+            Button,
+            { size: 'sm', variant: 'ghost', disabled: busy !== '', onClick: () => props.onCancel() },
+            t('cancel'),
+          ),
+        ),
+      )
+    }
+
     function Section(props) {
       const t = props.t
       const [phase, setPhase] = React.useState('loading')
@@ -185,6 +301,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState('')
       const [note, setNote] = React.useState(null)
       const [pendingRemove, setPendingRemove] = React.useState('')
+      const [sortBy, setSortBy] = React.useState('')
+      const [sortDir, setSortDir] = React.useState('asc')
 
       const load = React.useCallback(async () => {
         setPhase('loading')
@@ -281,100 +399,22 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const field = (label, hint, control, wide) =>
-        h(
-          'label',
-          { className: wide ? 'msx-field msx-wide' : 'msx-field' },
-          h('span', { className: 'msx-label' }, label),
-          control,
-          hint ? h('span', { className: 'msx-hint' }, hint) : null,
-        )
-
-      const editor = draft
-        ? h(
-            'div',
-            { className: 'msx-card' },
-            h('div', { className: 'msx-card-title' }, draft.originalId ? t('editTitle') : t('newTitle')),
-            h(
-              'div',
-              { className: 'msx-grid' },
-              field(
-                t('idLabel'),
-                t('idHint'),
-                h(Input, {
-                  value: draft.id,
-                  disabled: busy !== '',
-                  placeholder: 'prod_WMS',
-                  onChange: (event) => setDraft((prev) => ({ ...prev, id: event.target.value })),
-                }),
-              ),
-              field(
-                t('descLabel'),
-                t('descHint'),
-                h(Input, {
-                  value: draft.description,
-                  disabled: busy !== '',
-                  onChange: (event) => setDraft((prev) => ({ ...prev, description: event.target.value })),
-                }),
-              ),
-              field(
-                t('dsnLabel'),
-                t('dsnHint'),
-                h(Input, {
-                  value: draft.dsn,
-                  disabled: busy !== '',
-                  placeholder: 'sqlserver://user:password@host:1433/database',
-                  onChange: (event) => setDraft((prev) => ({ ...prev, dsn: event.target.value })),
-                }),
-                true,
-              ),
-              field(
-                t('writableLabel'),
-                t('writableHint'),
-                h(Switch, {
-                  checked: draft.writable,
-                  disabled: busy !== '',
-                  label: t('writableLabel'),
-                  onChange: (next) => setDraft((prev) => ({ ...prev, writable: next })),
-                }),
-              ),
-              field(
-                t('ddlLabel'),
-                t('ddlHint'),
-                h(Switch, {
-                  checked: draft.allowDdl,
-                  disabled: busy !== '',
-                  label: t('ddlLabel'),
-                  onChange: (next) => setDraft((prev) => ({ ...prev, allowDdl: next })),
-                }),
-              ),
-            ),
-            h(
-              'div',
-              { className: 'msx-actions' },
-              h(
-                Button,
-                { size: 'sm', variant: 'primary', disabled: busy !== '', onClick: () => void save() },
-                busy === 'save' ? t('saving') : t('save'),
-              ),
-              h(
-                Button,
-                { size: 'sm', variant: 'outline', disabled: busy !== '', onClick: () => void testDraft() },
-                busy === 'test' ? t('testing') : t('test'),
-              ),
-              h(
-                Button,
-                { size: 'sm', variant: 'ghost', disabled: busy !== '', onClick: () => setDraft(null) },
-                t('cancel'),
-              ),
-            ),
-          )
-        : null
-
-      const row = (item) =>
-        h(
+      const row = (item) => {
+        if (draft && draft.originalId === item.id) {
+          return h(Editor, {
+            key: 'edit:' + item.id,
+            draft,
+            setDraft,
+            busy,
+            t,
+            onSave: save,
+            onTest: testDraft,
+            onCancel: () => setDraft(null),
+          })
+        }
+        return h(
           'div',
-          { className: 'msx-row', key: item.id },
+          { className: 'msx-row', key: 'row:' + item.id },
           h(
             'div',
             { className: 'msx-rowhead' },
@@ -423,6 +463,26 @@ window.__ModuleLoader__.load({
                 ),
           ),
         )
+      }
+
+      const sortButton = (fieldKey, label) =>
+        h(
+          Button,
+          {
+            size: 'sm',
+            variant: sortBy === fieldKey ? 'primary' : 'outline',
+            disabled: busy !== '',
+            title: t('sortHint'),
+            onClick: () => {
+              if (sortBy === fieldKey) setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+              else {
+                setSortBy(fieldKey)
+                setSortDir('asc')
+              }
+            },
+          },
+          label + (sortBy === fieldKey ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : ''),
+        )
 
       const body = () => {
         if (phase === 'loading') return h('div', { className: 'msx-hint' }, t('loading'))
@@ -438,6 +498,7 @@ window.__ModuleLoader__.load({
             ),
           )
         }
+        const sorted = sortSources(data.sources, sortBy, sortDir)
         return h(
           React.Fragment,
           null,
@@ -451,12 +512,40 @@ window.__ModuleLoader__.load({
               t('add'),
             ),
             h(Button, { size: 'sm', variant: 'ghost', disabled: busy !== '', onClick: () => void load() }, t('reload')),
+            h(
+              'div',
+              { className: 'msx-sort' },
+              h('span', { className: 'msx-label' }, t('sortLabel')),
+              sortButton('id', t('sortId')),
+              sortButton('description', t('sortDescription')),
+              h(
+                Button,
+                {
+                  size: 'sm',
+                  variant: sortBy === '' ? 'primary' : 'ghost',
+                  disabled: busy !== '',
+                  onClick: () => setSortBy(''),
+                },
+                t('sortDefault'),
+              ),
+            ),
             note ? h('span', { className: note.kind === 'ok' ? 'msx-note msx-ok' : 'msx-note msx-err' }, note.text) : null,
           ),
-          editor,
+          draft && !sorted.some((item) => item.id === draft.originalId)
+            ? h(Editor, {
+                key: 'new',
+                draft,
+                setDraft,
+                busy,
+                t,
+                onSave: save,
+                onTest: testDraft,
+                onCancel: () => setDraft(null),
+              })
+            : null,
           data.sources.length === 0
             ? h('div', { className: 'msx-empty' }, t('empty'))
-            : h('div', { className: 'msx-list' }, data.sources.map(row)),
+            : h('div', { className: 'msx-list' }, sorted.map(row)),
         )
       }
 
