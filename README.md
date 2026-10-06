@@ -39,7 +39,7 @@ DeepSeek Harness 的 **SQL Server 原生工具插件**：模型直接读（可�
 
 ## 安装
 
-装完**重启 DSH** 生效（`sources.json` 的改动不用重启）。
+装完**重启 DSH** 生效：6 个工具与设置页标签页都在重启后出现（`sources.json` 的改动不用重启）。
 
 ### 本地目录安装（开发调试）
 
@@ -152,6 +152,23 @@ dsh plugin --profile web add "github:SouleyMoni1/dsh-tool-sqlite"
 
 密码用环境变量时要让 DSH 进程能读到（桌面端可在启动前设置系统环境变量，或改用 `password`）。
 
+## 设置页（图形化维护）
+
+DSH 设置 → 左侧 **SQL Server 数据源**（与官方标签页并列，`order: 45`）：列出全部源，新增 / 编辑 / 删除，逐条「测试连接」。
+改动直接写回 `sources.json`（同目录临时文件 + rename），宿主侧 mtime 热加载随即生效，不用重启。
+
+- 连接字符串写 `sqlserver://账号:密码@主机:1433/库名`，也吃 ADO 风格 `Server=host,1433;Database=db;User Id=u;Password=p`；
+- 密码里的 `@ : / ? #` 用百分号编码（`p@ss` → `p%40ss`）；
+- 编辑已有源时密码回显 `******`，原样保留即不改密码；想改用环境变量就填 `${MSSQL_PROD_PW}`；
+- 「允许写入 / 允许 DDL」对应 `writable` / `allowDdl`；
+- 明文密码只在宿主侧：下发给页面的 DSN 里密码恒为 `******`；
+- profile 的 `config.sources` 非空时页面顶部会提示「本页改动不生效」，此时把 `config.sources` 清空再用本页维护。
+
+实现：宿主侧 `src/settings-rpc.ts` 在 `connection` 的共享 `/api` 通道挂精确路由 `POST /api/dsh-tool-mssql`
+（信封 `{ channel, endpoint, payload }`，端点 `sources/list|save|remove|test`）；浏览器侧 `client/client.js` 是单文件客户端半区
+（`dsh.client.platform = "web"`，只 require React 与官方 primitives）。所以**装完插件要重启一次 DSH**，标签页才会出现；
+没有 Web 服务 / `connection` 服务的部署（如 headless）自动跳过设置页，6 个工具照常可用。
+
 ## 从 dbhub 迁移
 
 1. 把 `~/.dsh/mcp-servers/dbhub.toml` 里每个 `[[sources]]` 转成一条 `sources.json`：`dsn` 里的 `user:password@host:port/database` 拆成 `user` / `passwordEnv`（或 `password`）/ `server` / `port` / `database`；
@@ -225,8 +242,13 @@ npm run check   # typecheck + vitest + tsc 构建
 ```
 
 - `src/mssql-core.ts` —— 纯函数：SQL 白名单/禁词、标识符与类型格式化、源清单校验、凭据解析（全部可单测）；
+- `src/dsn.ts` —— 连接字符串 ⇄ 源配置（`sqlserver://` 与 ADO 两种写法、密码掩码）；
+- `src/settings-store.ts` —— `sources.json` 的原子读写与增删改；
 - `src/pool.ts` —— 连接池、查询/写执行、系统目录元数据查询；
-- `src/index.ts` —— 插件入口，注册 6 个工具。
+- `src/index.ts` —— 插件入口，注册 6 个工具；
+- `src/settings-rpc.ts` —— 设置页的宿主侧 RPC 路由；
+- `client/client.js` —— 浏览器侧设置页标签页（单文件客户端半区，无构建步骤）；
+- `tests/` —— vitest：SQL 守卫 + 连接字符串/清单增删改。
 
 ## 许可
 

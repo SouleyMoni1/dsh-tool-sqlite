@@ -8,6 +8,10 @@
  *   1. 插件 config.sources：cordis.patch.yml 里的数组；
  *   2. $DSH_HOME/mssql-tool/sources.json。
  *
+ * 图形化维护：浏览器侧设置页「SQL Server 数据源」经 connection.fetch 打 RPC，
+ * 宿主侧增删改同一个 sources.json（见 settings-rpc.ts）；没有 connection 的部署
+ * （例如 headless）自动跳过设置页，工具不受影响。
+ *
  * 凭据边界：密码只经 passwordEnv（推荐）或宿主侧文件进入进程，任何工具返回值都不含密码。
  */
 
@@ -34,6 +38,7 @@ import {
   runQuery,
   tableColumns,
 } from './pool.js'
+import { applySettingsRpc } from './settings-rpc.js'
 
 export const name = 'dsh-tool-mssql'
 export const inject = ['tools']
@@ -341,6 +346,21 @@ export function apply(ctx: Context, config: Config = {}): void {
       timeoutMs: TOOL_TIMEOUT_MS,
     }),
   )
+
+  // 设置页（Settings → SQL Server 数据源）：浏览器侧经 connection 打 RPC，宿主侧读写同一份 sources.json。
+  applySettingsRpc(ctx, {
+    filePath: () => filePath,
+    configDriven: () => Array.isArray(config.sources) && config.sources.length > 0,
+    list: listSources,
+    invalidate: () => {
+      fromFile = null
+      fromConfig = null
+    },
+    probe: async (source) => {
+      const info = await probe(source, resolvePassword(source))
+      return { version: info.version, database: info.database }
+    },
+  })
 
   // 插件卸载/重载时关闭连接池；disposer 由 cordis 在 fiber 卸载时调用。
   ctx.effect(() => () => {

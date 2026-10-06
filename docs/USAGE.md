@@ -9,6 +9,16 @@
 
 两者都在时以 `config.sources` 为准（非空即接管）。
 
+## 1.5 图形化维护（设置页）
+
+设置 → 左侧 **SQL Server 数据源**：列清单、新增、编辑、删除、逐条「测试连接」，写的就是上面那个 `sources.json`。
+
+- 连接字符串两种写法：`sqlserver://user:password@host:1433/database`、`Server=host,1433;Database=db;User Id=u;Password=p`；
+- 密码里的 `@ : / ? #` 要百分号编码（`p@ss` → `p%40ss`）；
+- 编辑时密码回显 `******`，不动它就保持原密码；填 `${MSSQL_PW}` 这种形式则改用环境变量；
+- 页面顶部出现「数据源来自 config.sources」提示，说明 profile 的 `cordis.patch.yml` 里有非空 `config.sources`，本页改动不生效；
+- 标签页要**重启 DSH** 后才出现（客户端半区随宿主启动组装）；没有 Web 服务的部署（headless）没有这个页面。
+
 ## 2. 最小可用配置
 
 ```json
@@ -79,6 +89,11 @@ mssql_query
 | `Timeout: Request failed to complete` | 查询超过 `requestTimeoutMs` | 加大该源的 `requestTimeoutMs`，或优化 SQL |
 | `只读通道仅放行 ...` | 语句不是 SELECT 白名单 | 读用 `mssql_query`，写用 `mssql_execute` |
 | `当前源未开启 allowDdl` | 源没开 DDL | 源配置加 `"allowDdl": true`（仅限非生产库） |
+| 设置里看不到「SQL Server 数据源」 | 客户端半区随 DSH 启动组装 | 重启 DSH；确认包内有 `client/client.js` 且 `package.json` 声明了 `exports["./client"]` 与 `dsh.client` |
+| `connection: exact Fetch route "/api/dsh-tool-mssql" is already registered` | 路由被重复注册（插件被装了两份） | 检查 profile 里是否同时存在两份 dsh-tool-mssql |
+| 页面提示「数据源来自 config.sources」 | profile 的 `cordis.patch.yml` 里有非空 `config.sources` | 清空该数组（`sources: []`）后重启，再用设置页维护 |
+| `别名只能用字母/数字/下划线/点/连字符` | id 里有空格或中文 | 换成 ASCII 别名 |
+| `不支持的协议 postgres://` | DSN 协议头不是 SQL Server | 用 `sqlserver://` / `mssql://` / `tds://`，或 ADO 风格 |
 
 ## 7. 卸载与回滚
 
