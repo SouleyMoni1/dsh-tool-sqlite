@@ -15,7 +15,7 @@
 
 - 连接字符串两种写法：`sqlserver://user:password@host:1433/database`、`Server=host,1433;Database=db;User Id=u;Password=p`；
 - 密码里的 `@ : / ? #` 要百分号编码（`p@ss` → `p%40ss`）；
-- 编辑时密码回显 `******`，不动它就保持原密码；填 `${MSSQL_PW}` 这种形式则改用环境变量；
+- 编辑表单里是明文连接串（列表里仍是 `******`），改完保存即生效；填 `${MSSQL_PW}` 这种形式则把密码放到环境变量；
 - 列表可按别名 / 描述排序（再点一次切升/降序，「文件顺序」还原）；「编辑」就在那一行就地展开，新增卡片在工具条下方；
 - 页面顶部出现「数据源来自 config.sources」提示，说明 profile 的 `cordis.patch.yml` 里有非空 `config.sources`，本页改动不生效；
 - 标签页要**重启 DSH** 后才出现（客户端半区随宿主启动组装）；没有 Web 服务的部署（headless）没有这个页面。

@@ -100,7 +100,7 @@ export function parseDsn(dsn: string): ParsedDsn {
   }
 }
 
-/** 源配置组装成连接字符串：mask 时只回显占位，明文密码不下发浏览器。 */
+/** 源配置组装成连接字符串：mask 只回显占位（列表用），否则带明文密码（编辑表单用）。 */
 export function formatDsn(source: SourceConfig, opts: { mask?: boolean } = {}): string {
   const port = source.port ?? DEFAULT_PORT
   const envOpen = '$' + '{'

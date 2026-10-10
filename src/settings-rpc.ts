@@ -6,7 +6,7 @@
  * 工具照常可用，只是没有设置页）。
  *
  * 端点：
- *   sources/list    列出源（密码只回显占位）
+ *   sources/list    列出源（dsn 掩码给列表看，dsnEdit 明文给编辑表单）
  *   sources/save    新增/修改一个源（写 sources.json）
  *   sources/remove  删除一个源
  *   sources/test    试连一个源（已保存的 id，或表单里还没保存的 DSN）
@@ -69,12 +69,17 @@ function text(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined
 }
 
-/** 源 → 设置页视图：密码换成占位，明文永不下发。 */
+/**
+ * 源 → 设置页视图。
+ * dsn 给列表看（密码掩码）；dsnEdit 给编辑表单用（明文密码，本机页面，方便直接改）。
+ * passwordEnv 引用的源两边都只显示 ${ENV}，环境变量的值从不下发。
+ */
 function viewOf(source: SourceConfig): Record<string, unknown> {
   return {
     id: source.id,
     description: source.description ?? '',
     dsn: formatDsn(source, { mask: true }),
+    dsnEdit: formatDsn(source),
     server: source.server,
     port: source.port ?? DEFAULT_PORT,
     database: source.database ?? '',

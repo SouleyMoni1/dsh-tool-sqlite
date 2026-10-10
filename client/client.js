@@ -65,7 +65,7 @@ window.__ModuleLoader__.load({
       descHint: '给人看的一行说明，可留空。',
       dsnLabel: '连接字符串',
       dsnHint:
-        'sqlserver://账号:密码@主机:1433/库名。编辑已有源时密码显示为 ******，原样保留即不改密码；也可写 ${环境变量名} 引用密码。',
+        'sqlserver://账号:密码@主机:1433/库名。这里直接显示明文密码（@ : / ? # 等字符已按百分号编码），改完保存即生效；列表里仍显示为 ******。想不落盘就写 ${环境变量名}。',
       writableLabel: '允许写入',
       writableHint: '打开后 mssql_execute 才能对它执行 INSERT/UPDATE/DELETE/MERGE（仍需显式 allowWrite）。',
       ddlLabel: '允许 DDL',
@@ -111,7 +111,7 @@ window.__ModuleLoader__.load({
       descHint: 'One human-readable line; may be empty.',
       dsnLabel: 'Connection string',
       dsnHint:
-        'sqlserver://user:password@host:1433/database. An existing password shows as ****** — leave it untouched to keep it, or use ${ENV_VAR}.',
+        'sqlserver://user:password@host:1433/database. The real password is shown here (@ : / ? # appear percent-encoded); the list still shows ******. Use ${ENV_VAR} to keep it out of the file.',
       writableLabel: 'Allow writes',
       writableHint: 'Lets mssql_execute run INSERT/UPDATE/DELETE/MERGE here (allowWrite is still required).',
       ddlLabel: 'Allow DDL',
@@ -181,7 +181,7 @@ window.__ModuleLoader__.load({
         originalId: item ? item.id : '',
         id: item ? item.id : '',
         description: item ? item.description : '',
-        dsn: item ? item.dsn : '',
+        dsn: item ? item.dsnEdit || item.dsn : '',
         writable: item ? item.writable : false,
         allowDdl: item ? item.allowDdl : false,
       }
